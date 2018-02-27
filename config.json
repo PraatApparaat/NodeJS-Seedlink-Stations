@@ -1,7 +1,9 @@
 {
   "PORT": 3001,
   "HOST": "127.0.0.1",
-  "SEEDLINK_HOST": "eida.orfeus-eu.org",
-  "SEEDLINK_PORT": 18000,
+  "SEEDLINK": [{
+    "hostport": "eida.orfeus-eu.org:18000"},
+    {"hostport": "geofon.gfz-potsdam.de:18000"},
+    {"hostport": "eida.bgr.de:18000" }],
   "REFRESH_INTERVAL": 60000
 }
