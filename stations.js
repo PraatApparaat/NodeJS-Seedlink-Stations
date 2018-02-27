@@ -4,11 +4,13 @@ const CONFIG = require("./config");
 const url = require("url");
 const querystring = require("querystring");
 
+// Global container for Stations
+var GLOBAL_STATIONS = null;
+
 function validateParameters(queryObject) {
 
   const ALLOWED_PARAMETERS = [
-    "host",
-    "port"
+    "hostport",
   ];
 
   // Check if all parameters are allowed
@@ -20,10 +22,11 @@ function validateParameters(queryObject) {
 
   });
 
-
   return true;
 
 }
+
+var payload = new Object();
 
 module.exports = function(callback) {
 
@@ -49,13 +52,15 @@ module.exports = function(callback) {
       return HTTPError(response, 400, exception);
     }
 
-    var seedlink_host = queryObject['host'] 
-    var seedlink_port = queryObject['port']
+    payload = filterSeedlinkMetadata(queryObject);
 
-    // Check if Seedlink to HOST/PORT is present
-    SeedlinkChecker(seedlink_host, seedlink_port, response);
+    response.end(JSON.stringify(payload));
 
   })
+
+
+  // Refresh payload object over timeinterval
+  setInterval(SeedlinkChecker, CONFIG.REFRESH_INTERVAL);
 
   // Listen to incoming HTTP connections
   Server.listen(CONFIG.PORT, CONFIG.HOST, function() {
@@ -64,7 +69,30 @@ module.exports = function(callback) {
     }
   });
 
+  // Get initial Seedlink metadata
+  SeedlinkChecker();
 
+}
+
+function filterSeedlinkMetadata(queryObject) {
+
+  // Create a copy of the global latencies map
+  var results = GLOBAL_STATIONS
+
+  // Go over all submitted keys
+  Object.keys(queryObject).forEach(function(parameter) {
+
+    // Input values as array (support comma delimited)
+    values = queryObject[parameter].split(",");
+
+  })
+
+  var filtered_results = new Object()
+  values.forEach(function (key) {
+    filtered_results[key] = results[key]
+  });
+
+  return filtered_results;
 
 }
 
@@ -85,67 +113,76 @@ function HTTPError(response, status, message) {
 
 }
 
-function SeedlinkChecker(SEEDLINK_HOST, SEEDLINK_PORT, response) {
+function SeedlinkChecker() {
 
   /* Function SeedlinkChecker
    * Checks if Seedlink is present
    * Returns all metadata: networks, stations, sites
    */
 
-  const INFO = new Buffer("INFO STREAMS\r\n");
+  // Container with metadata per interval
+  var metadata = new Object()
 
-  // Open a new TCP socket
-  var socket = new Network.Socket()
+  // Container with seedlink hosts and ports
+  var SEEDLINK = CONFIG.SEEDLINK
 
-  // Create a new empty buffer
-  var buffer = new Buffer(0);
-  var records = new Array();
+  SEEDLINK.map(function(x) {
+    var seedlink_host = ((x['hostport']).split(":"))[0]
+    var seedlink_port = ((x['hostport']).split(":"))[1]
 
-  // Set Timout in milliseconds
-  var timeouttime = 10000
-  socket.setTimeout(timeouttime);
+    // Open a new TCP socket
+    var socket = new Network.Socket()
 
-  // When the connection is established write INFO
-    socket.connect(SEEDLINK_PORT, SEEDLINK_HOST, function() {
-      socket.write("CAT\r\n");
+    // Create a new empty buffer
+    var buffer = new Buffer(0);
+    var records = new Array();
+
+    // Set Timout in milliseconds
+    var timeouttime = 10000
+    socket.setTimeout(timeouttime);
+
+    // When the connection is established write write info
+      socket.connect(seedlink_port, seedlink_host, function() {
+        socket.write("CAT\r\n");
+      });
+
+    // Data is written over the socket
+    socket.on("data", function(data) {
+
+      // Extend the buffer with new data
+      buffer = Buffer.concat([buffer, data]);
+
+      /*
+	  * Take last line of buffer string including 'END' term
+	  * Use END term to destroy socket
+       */
+      last_line = buffer.slice(buffer.lastIndexOf("\n"))
+      end_term = last_line.slice(last_line.length -3)
+
+      // Final record
+      if(end_term.toString() === "END") {
+
+        socket.destroy();
+
+        // Return SEEDLINK buffer as json response
+        var seedlink_buffer_json = parseRecords(buffer)
+        metadata[seedlink_host + ":" + seedlink_port] = seedlink_buffer_json
+        GLOBAL_STATIONS = metadata
+      }
+
     });
 
-  // Data is written over the socket
-  socket.on("data", function(data) {
-
-    // Extend the buffer with new data
-    buffer = Buffer.concat([buffer, data]);
-
-    /*
-	* Take last line of buffer string including 'END' term
-	* Use END term to destroy socket
-     */
-    last_line = buffer.slice(buffer.lastIndexOf("\n"))
-    end_term = last_line.slice(last_line.length -3)
-
-    // Final record
-    if(end_term.toString() === "END") {
-
-      socket.destroy();
-
-      // Return buffer as json response
-      response.end(parseRecords(buffer))
-    }
-
-
-
-  });
-
-  // Oops
+    // Oops
     socket.on("error", function(error) {
-	  response.end("0")
+	 metadata[seedlink_host + ":" + seedlink_port] = "error"
     });
   
     socket.on('timeout', () => {
-      response.end('socket timeout (after ' + timeouttime + ' ms)');
+	 metadata[seedlink_host + ":" + seedlink_port] = null
       socket.end();
     });
 
+  });
 }
 
 function parseRecords(buffer) {
@@ -164,6 +201,6 @@ function parseRecords(buffer) {
 
   });
 
-  return JSON.stringify(result);
+  return result
 
 }
