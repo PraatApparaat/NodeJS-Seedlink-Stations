@@ -5,7 +5,7 @@ const url = require("url");
 const querystring = require("querystring");
 
 // Global container for Stations
-var GLOBAL_STATIONS = null;
+var GLOBAL_STATIONS = new Object()
 
 function validateParameters(queryObject) {
 
@@ -37,18 +37,24 @@ module.exports = function(callback) {
     response.setHeader("Access-Control-Allow-Methods", "GET");
 
     var uri = url.parse(request.url);
+    var queryObject = querystring.parse(uri.query);
+
+    if (uri.query == null) {
+      return HTTPError(response, 400, "Define path");
+    } else if (uri.query.length == 0) {
+      return HTTPError(response, 400, "Empty query string");
+    }
 
     // Only root path is supported
     if(uri.pathname !== "/") {
-      return HTTPError(response, 404, "Method not supported")
+      return HTTPError(response, 405, "Method not supported")
     }
-
-    var queryObject = querystring.parse(uri.query);
 
     // Sanitize user input
     try {
       validateParameters(queryObject);
     } catch(exception) {
+	 console.log(exception)
       return HTTPError(response, 400, exception);
     }
 
@@ -120,9 +126,6 @@ function SeedlinkChecker() {
    * Returns all metadata: networks, stations, sites
    */
 
-  // Container with metadata per interval
-  var metadata = new Object()
-
   // Container with seedlink hosts and ports
   var SEEDLINK = CONFIG.SEEDLINK
 
@@ -166,19 +169,18 @@ function SeedlinkChecker() {
 
         // Return SEEDLINK buffer as json response
         var seedlink_buffer_json = parseRecords(buffer)
-        metadata[seedlink_host + ":" + seedlink_port] = seedlink_buffer_json
-        GLOBAL_STATIONS = metadata
+        GLOBAL_STATIONS[seedlink_host + ":" + seedlink_port] = seedlink_buffer_json
       }
 
     });
 
     // Oops
     socket.on("error", function(error) {
-	 metadata[seedlink_host + ":" + seedlink_port] = "error"
+	 GLOBAL_STATIONS[seedlink_host + ":" + seedlink_port] = "error"
     });
   
     socket.on('timeout', () => {
-	 metadata[seedlink_host + ":" + seedlink_port] = null
+	 GLOBAL_STATIONS[seedlink_host + ":" + seedlink_port] = null
       socket.end();
     });
 
