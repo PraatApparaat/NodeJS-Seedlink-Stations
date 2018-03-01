@@ -10,25 +10,22 @@ var GLOBAL_STATIONS = new Object()
 function validateParameters(queryObject) {
 
   const ALLOWED_PARAMETERS = [
-    "hostport",
+    "host",
   ];
 
   // Check if all parameters are allowed
   Object.keys(queryObject).forEach(function(x) {
-
     if(ALLOWED_PARAMETERS.indexOf(x) === -1) {
       throw("Key " + x + " is not supported");
     }
-
   });
-
-  return true;
 
 }
 
-var payload = new Object();
-
 module.exports = function(callback) {
+
+  setInterval(SeedlinkChecker, CONFIG.REFRESH_INTERVAL);
+  SeedlinkChecker();
 
   // Create a HTTP server
   const Server = Http.createServer(function(request, response) {
@@ -39,10 +36,12 @@ module.exports = function(callback) {
     var uri = url.parse(request.url);
     var queryObject = querystring.parse(uri.query);
 
-    if (uri.query == null) {
-      return HTTPError(response, 400, "Define path");
-    } else if (uri.query.length == 0) {
-      return HTTPError(response, 400, "Empty query string");
+    if(uri.query === null || uri.query === "") {
+      return HTTPError(response, 400, "Empty query string submitted");
+    }
+
+    if(!Object.prototype.hasOwnProperty.call(queryObject, "host")) {
+      return HTTPError(response, 400, "Host parameter is required");
     }
 
     // Only root path is supported
@@ -54,19 +53,12 @@ module.exports = function(callback) {
     try {
       validateParameters(queryObject);
     } catch(exception) {
-	 console.log(exception)
       return HTTPError(response, 400, exception);
     }
 
-    payload = filterSeedlinkMetadata(queryObject);
+    response.end(JSON.stringify(filterSeedlinkMetadata(queryObject)));
 
-    response.end(JSON.stringify(payload));
-
-  })
-
-
-  // Refresh payload object over timeinterval
-  setInterval(SeedlinkChecker, CONFIG.REFRESH_INTERVAL);
+  });
 
   // Listen to incoming HTTP connections
   Server.listen(CONFIG.PORT, CONFIG.HOST, function() {
@@ -75,30 +67,21 @@ module.exports = function(callback) {
     }
   });
 
-  // Get initial Seedlink metadata
-  SeedlinkChecker();
-
 }
 
 function filterSeedlinkMetadata(queryObject) {
 
   // Create a copy of the global latencies map
-  var results = GLOBAL_STATIONS
+  var requestedHosts = queryObject.host.split(",");
 
-  // Go over all submitted keys
-  Object.keys(queryObject).forEach(function(parameter) {
-
-    // Input values as array (support comma delimited)
-    values = queryObject[parameter].split(",");
-
-  })
-
-  var filtered_results = new Object()
-  values.forEach(function (key) {
-    filtered_results[key] = results[key]
+  return Object.keys(GLOBAL_STATIONS).filter(function(x) {
+    return requestedHosts.indexOf(x) !== -1;
+  }).map(function(x) {
+    return {
+      "host": x,
+      "stations": GLOBAL_STATIONS[x]
+    };
   });
-
-  return filtered_results;
 
 }
 
@@ -126,28 +109,36 @@ function SeedlinkChecker() {
    * Returns all metadata: networks, stations, sites
    */
 
-  // Container with seedlink hosts and ports
-  var SEEDLINK = CONFIG.SEEDLINK
+  const CAT_COMMAND = "CAT\r\n";
 
-  SEEDLINK.map(function(x) {
-    var seedlink_host = ((x['hostport']).split(":"))[0]
-    var seedlink_port = ((x['hostport']).split(":"))[1]
+  // Container with seedlink hosts and ports
+  CONFIG.SERVERS.forEach(function(SERVER) {
 
     // Open a new TCP socket
     var socket = new Network.Socket()
 
     // Create a new empty buffer
     var buffer = new Buffer(0);
-    var records = new Array();
 
     // Set Timout in milliseconds
-    var timeouttime = 10000
-    socket.setTimeout(timeouttime);
+    socket.setTimeout(CONFIG.SOCKET.TIMEOUT);
+
+    // e.g. ECONNREFUSED
+    socket.on("error", function() {
+      GLOBAL_STATIONS[SERVER.HOST] = null;
+      socket.destroy();
+    });
+
+    // Timeout
+    socket.on("timeout", function() {
+      GLOBAL_STATIONS[SERVER.HOST] = null;
+      socket.destroy();
+    });
 
     // When the connection is established write write info
-      socket.connect(seedlink_port, seedlink_host, function() {
-        socket.write("CAT\r\n");
-      });
+    socket.connect(SERVER.PORT, SERVER.HOST, function() {
+      socket.write(CAT_COMMAND);
+    });
 
     // Data is written over the socket
     socket.on("data", function(data) {
@@ -155,54 +146,34 @@ function SeedlinkChecker() {
       // Extend the buffer with new data
       buffer = Buffer.concat([buffer, data]);
 
-      /*
-	  * Take last line of buffer string including 'END' term
-	  * Use END term to destroy socket
-       */
-      last_line = buffer.slice(buffer.lastIndexOf("\n"))
-      end_term = last_line.slice(last_line.length -3)
+      if(buffer.lastIndexOf("\nEND") === buffer.length - 4) {
 
-      // Final record
-      if(end_term.toString() === "END") {
+        GLOBAL_STATIONS[SERVER.HOST] = parseBuffer(buffer);
 
+        // Destroy the socket
         socket.destroy();
 
-        // Return SEEDLINK buffer as json response
-        var seedlink_buffer_json = parseRecords(buffer)
-        GLOBAL_STATIONS[seedlink_host + ":" + seedlink_port] = seedlink_buffer_json
       }
 
     });
 
-    // Oops
-    socket.on("error", function(error) {
-	 GLOBAL_STATIONS[seedlink_host + ":" + seedlink_port] = "error"
-    });
-  
-    socket.on('timeout', () => {
-	 GLOBAL_STATIONS[seedlink_host + ":" + seedlink_port] = null
-      socket.end();
-    });
-
   });
+
+
 }
 
-function parseRecords(buffer) {
+function parseBuffer(buffer) {
 
-  var buffer_to_string = (buffer.toString()).split("\n")
+  // Cut off the END
+  buffer = buffer.slice(0, buffer.lastIndexOf("\nEND"));
 
-  // Remove 'END' term from record
-  buffer_to_string.pop();
-
-  result = buffer_to_string.map(function(x) {
+  // Split by line and map result
+  return buffer.toString().split("\n").map(function(x) {
     return {
       "network": x.slice(0, 2).trim(),
-	 "station": x.slice(3, 8).trim(),
-	 "site": x.slice(9, x.length).trim()
+      "station": x.slice(3, 8).trim(),
+      "site": x.slice(9, x.length).trim()
     }
-
   });
-
-  return result
 
 }
