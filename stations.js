@@ -79,7 +79,10 @@ function filterSeedlinkMetadata(queryObject) {
   }).map(function(x) {
     return {
       "host": x,
-      "stations": GLOBAL_STATIONS[x]
+      "identifier": GLOBAL_STATIONS[x].identifier,
+      "connected": GLOBAL_STATIONS[x] !== null, 
+      "stations": GLOBAL_STATIONS[x].stations,
+      "version": GLOBAL_STATIONS[x].version
     };
   });
 
@@ -110,9 +113,13 @@ function SeedlinkChecker() {
    */
 
   const CAT_COMMAND = "CAT\r\n";
+  const HELLO_COMMAND = "HELLO\r\n";
 
   // Container with seedlink hosts and ports
   CONFIG.SERVERS.forEach(function(SERVER) {
+
+    var version = null;
+    var identifier = null
 
     // Open a new TCP socket
     var socket = new Network.Socket()
@@ -137,7 +144,7 @@ function SeedlinkChecker() {
 
     // When the connection is established write write info
     socket.connect(SERVER.PORT, SERVER.HOST, function() {
-      socket.write(CAT_COMMAND);
+      socket.write(HELLO_COMMAND);
     });
 
     // Data is written over the socket
@@ -146,9 +153,26 @@ function SeedlinkChecker() {
       // Extend the buffer with new data
       buffer = Buffer.concat([buffer, data]);
 
+      // Get the Seedlink version
+      if(version === null && buffer.toString().split("\r\n").length === 3) {
+
+        // Extract the version
+        [version, identifier] = buffer.toString().split("\r\n");
+        buffer = new Buffer(0);
+
+        // Proceed with the CAT command
+        return socket.write(CAT_COMMAND);
+
+      }
+
       if(buffer.lastIndexOf("\nEND") === buffer.length - 4) {
 
-        GLOBAL_STATIONS[SERVER.HOST] = parseBuffer(buffer);
+        // Update the global cache
+        GLOBAL_STATIONS[SERVER.HOST] = {
+          "stations": parseBuffer(buffer), 
+          "identifier": identifier,
+          "version": version
+        }
 
         // Destroy the socket
         socket.destroy();
