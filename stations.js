@@ -10,7 +10,8 @@ var GLOBAL_STATIONS = new Object()
 function validateParameters(queryObject) {
 
   const ALLOWED_PARAMETERS = [
-    "host",
+    "hostport",
+    "station"
   ];
 
   // Check if all parameters are allowed
@@ -40,8 +41,8 @@ module.exports = function(callback) {
       return HTTPError(response, 400, "Empty query string submitted");
     }
 
-    if(!Object.prototype.hasOwnProperty.call(queryObject, "host")) {
-      return HTTPError(response, 400, "Host parameter is required");
+    if (Object.keys(queryObject).length > 1) {
+      return HTTPError(response, 400, "Invalid input, only one parameter allowed")
     }
 
     // Only root path is supported
@@ -71,21 +72,35 @@ module.exports = function(callback) {
 
 function filterSeedlinkMetadata(queryObject) {
 
-  // Create a copy of the global latencies map
-  var requestedHosts = queryObject.host.split(",");
+  if (Object.keys(queryObject) == "station") {
+    return Object.keys(GLOBAL_STATIONS).filter(function(x) {
+	 return GLOBAL_STATIONS[x]["stations"].map(function(x) {
+        return x.network + "." + x.station;
+      }).indexOf(queryObject.station) !== -1;
+    }).map(function(x) {
+          return {
+            "hostport": x,
+            "identifier": GLOBAL_STATIONS[x].identifier,
+            "connected": GLOBAL_STATIONS[x] !== null,
+            "station": queryObject.station,
+            "version": GLOBAL_STATIONS[x].version
+          }
+        });
+  } else if (Object.keys(queryObject) == "hostport") {
+    var requestedHosts = queryObject.hostport.split(",");
 
-  return Object.keys(GLOBAL_STATIONS).filter(function(x) {
-    return requestedHosts.indexOf(x) !== -1;
-  }).map(function(x) {
-    return {
-      "host": x,
-      "identifier": GLOBAL_STATIONS[x].identifier,
-      "connected": GLOBAL_STATIONS[x] !== null, 
-      "stations": GLOBAL_STATIONS[x].stations,
-      "version": GLOBAL_STATIONS[x].version
-    };
-  });
-
+    return Object.keys(GLOBAL_STATIONS).filter(function(x) {
+      return requestedHosts.indexOf(x) !== -1;
+    }).map(function(x) {
+      return {
+        "hostport": x,
+        "identifier": GLOBAL_STATIONS[x].identifier,
+        "connected": GLOBAL_STATIONS[x] !== null, 
+        "stations": GLOBAL_STATIONS[x].stations,
+        "version": GLOBAL_STATIONS[x].version
+      };
+    });
+  }
 }
 
 // Start the NodeJS Seedlink Server
@@ -118,6 +133,9 @@ function SeedlinkChecker() {
   // Container with seedlink hosts and ports
   CONFIG.SERVERS.forEach(function(SERVER) {
 
+    // Define HostPort
+    var HOSTPORT = SERVER.HOST + ":" + SERVER.PORT
+
     var version = null;
     var identifier = null
 
@@ -132,13 +150,13 @@ function SeedlinkChecker() {
 
     // e.g. ECONNREFUSED
     socket.on("error", function() {
-      GLOBAL_STATIONS[SERVER.HOST] = null;
+      GLOBAL_STATIONS[HOSTPORT] = null;
       socket.destroy();
     });
 
     // Timeout
     socket.on("timeout", function() {
-      GLOBAL_STATIONS[SERVER.HOST] = null;
+      GLOBAL_STATIONS[HOSTPORT] = null;
       socket.destroy();
     });
 
@@ -168,7 +186,7 @@ function SeedlinkChecker() {
       if(buffer.lastIndexOf("\nEND") === buffer.length - 4) {
 
         // Update the global cache
-        GLOBAL_STATIONS[SERVER.HOST] = {
+        GLOBAL_STATIONS[HOSTPORT] = {
           "stations": parseBuffer(buffer), 
           "identifier": identifier,
           "version": version
